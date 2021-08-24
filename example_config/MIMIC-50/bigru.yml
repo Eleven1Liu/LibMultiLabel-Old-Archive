@@ -1,4 +1,3 @@
-# https://github.com/jamesmullenbach/caml-mimic/blob/master/predictions/CAML_mimic3_50/train_new_model.sh
 # data
 data_dir: data/MIMIC-50
 data_name: MIMIC-50
@@ -7,13 +6,13 @@ max_seq_length: 2500
 
 # train
 seed: 1337
-epochs: 200
+epochs: 100
 batch_size: 16
 optimizer: adam
-learning_rate: 0.0001
+learning_rate: 0.001
 weight_decay: 0
 patience: 10
-shuffle: false
+shuffle: true
 
 # eval
 eval_batch_size: 1
@@ -21,13 +20,13 @@ monitor_metrics: ['P@1','P@3','P@5']
 val_metric: P@5
 
 # model
-model_name: CAML
+model_name: BiGRU
 init_weight: null
 network_config:
   activation: tanh
-  dropout: 0.2
-  filter_sizes: [10]
-  num_filter_per_size: 50
+  dropout: 0.8
+  rnn_dim: 1024
+  rnn_layers: 1
 
 # pretrained vocab / embeddings
 vocab_file: data/MIMIC-50/vocab.csv

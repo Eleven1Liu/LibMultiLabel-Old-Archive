@@ -4,6 +4,7 @@ LibMultiLabel is a simple tool with the following functionalities.
 
 - end-to-end services from raw texts to final evaluation/analysis
 - support of common network architectures for multi-label text classification
+- easy hyper-parameter selection
 
 This is an on-going development so many improvements are still being made. Comments are very welcome.
 
@@ -78,6 +79,7 @@ Put labels and texts in the training, validation, and test set separately in `tr
 - one sample per line
 - seperate ID, labels and texts by `<TAB>` (the ID column is optional)
 - labels are split by spaces
+- should not contain any `<TAB>` in each field
 
 With ID column:
 ```

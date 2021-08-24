@@ -1,19 +1,12 @@
 import argparse
 import logging
-import os
-from datetime import datetime
-from pathlib import Path
-
-import pytorch_lightning as pl
 import yaml
-from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
+
 from pytorch_lightning.utilities.parsing import AttributeDict
 
-from libmultilabel import data_utils
-from libmultilabel.model import Model
-from libmultilabel.utils import (Timer, dump_log, init_device,
-                                 save_top_k_predictions, set_seed)
+# from libmultilabel import linear
+from torch_trainer import TorchTrainer
+from libmultilabel.utils import Timer
 
 
 def get_config():
@@ -70,6 +63,8 @@ def get_config():
                         help='Momentum factor for SGD only (default: %(default)s)')
     parser.add_argument('--patience', type=int, default=5,
                         help='Number of epochs to wait for improvement before early stopping (default: %(default)s)')
+    parser.add_argument('--normalize_embed', action='store_true',
+                        help='Whether the embeddings of each word is normalized to a unit vector (default: %(default)s)')
 
     # model
     parser.add_argument('--model_name', default='KimCNN',
@@ -92,7 +87,7 @@ def get_config():
     # eval
     parser.add_argument('--eval_batch_size', type=int, default=256,
                         help='Size of evaluating batches (default: %(default)s)')
-    parser.add_argument('--metrics_thresholds', type=float, nargs='+', default=[0.5],
+    parser.add_argument('--metric_threshold', type=float, default=0.5,
                         help='Thresholds to monitor for metrics (default: %(default)s)')
     parser.add_argument('--monitor_metrics', nargs='+', default=['P@1', 'P@3', 'P@5'],
                         help='Metrics to monitor while validating (default: %(default)s)')
@@ -111,9 +106,11 @@ def get_config():
     parser.add_argument('--save_k_predictions', type=int, nargs='?', const=100, default=0,
                         help='Save top k predictions on test set. k=%(const)s if not specified. (default: %(default)s)')
     parser.add_argument('--predict_out_path',
-                        help='Path to the an output file holding top 100 label results (default: %(default)s)')
+                        help='Path to the an output file holding top k label results (default: %(default)s)')
 
     # others
+    parser.add_argument('--linear', action='store_true',
+                        help='Train linear model')
     parser.add_argument('--cpu', action='store_true',
                         help='Disable CUDA')
     parser.add_argument('--silent', action='store_true',
@@ -134,73 +131,47 @@ def get_config():
     return config
 
 
+def check_config(config):
+    """Check if the configuration has invalid arguments.
+
+    Args:
+        config (AttributeDict): Config of the experiment from `get_args`.
+    """
+    if config.model_name == 'XMLCNN' and config.seed is not None:
+        raise ValueError("nn.AdaptiveMaxPool1d doesn't have a deterministic implementation but seed is"
+                         "specified. Please do not specify seed.")
+
+
 def main():
+    # Get config
     config = get_config()
+    check_config(config)
+
+    # Set up logger
     log_level = logging.WARNING if config.silent else logging.INFO
     logging.basicConfig(
         level=log_level, format='%(asctime)s %(levelname)s:%(message)s')
-    set_seed(seed=config.seed)
-    config.device = init_device(use_cpu=config.cpu)
 
-    config.run_name = '{}_{}_{}'.format(
-        config.data_name,
-        Path(config.config).stem if config.config else config.model_name,
-        datetime.now().strftime('%Y%m%d%H%M%S'),
-    )
-    logging.info(f'Run name: {config.run_name}')
-
-    datasets = data_utils.load_datasets(config)
-
-    checkpoint_dir = os.path.join(config.result_dir, config.run_name)
-    checkpoint_callback = ModelCheckpoint(dirpath=checkpoint_dir,
-                                          filename='best_model',
-                                          save_last=True, save_top_k=1,
-                                          monitor=config.val_metric, mode='max')
-    earlystopping_callback = EarlyStopping(patience=config.patience,
-                                           monitor=config.val_metric, mode='max')
-
-    trainer = pl.Trainer(logger=False,
-                         num_sanity_val_steps=0,
-                         gpus=0 if config.cpu else 1,
-                         progress_bar_refresh_rate=0 if config.silent else 1,
-                         max_epochs=config.epochs,
-                         callbacks=[checkpoint_callback, earlystopping_callback])
-
-    if config.eval:
-        model = Model.load_from_checkpoint(config.checkpoint_path)
+    if config.linear:
+        # load raw texts and generate tfidf, or load tfidf
+        pass
     else:
-        if config.checkpoint_path:
-            model = Model.load_from_checkpoint(config.checkpoint_path)
+        trainer = TorchTrainer(config) # initialize trainer
+
+    # train
+    if not config.eval:
+        if config.linear:
+            # model = linear.train_1vsrest(y, x)
+            pass
         else:
-            word_dict = data_utils.load_or_build_text_dict(
-                config, datasets['train'])
-            classes = data_utils.load_or_build_label(config, datasets)
-            model = Model(config, word_dict, classes)
-
-        train_loader = data_utils.get_dataset_loader(
-            model.config, datasets['train'], model.word_dict, model.classes,
-            shuffle=model.config.shuffle, train=True)
-        val_loader = data_utils.get_dataset_loader(
-            model.config, datasets['val'], model.word_dict, model.classes, train=False)
-
-        trainer.fit(model, train_loader, val_loader)
-
-        logging.info(f'Loading best model from `{checkpoint_callback.best_model_path}`...')
-        model = Model.load_from_checkpoint(checkpoint_callback.best_model_path)
-
-    if 'test' in datasets:
-        test_loader = data_utils.get_dataset_loader(
-            model.config, datasets['test'], model.word_dict, model.classes, train=False)
-        metric_dict = trainer.test(model, test_dataloaders=test_loader)[0]
-
-        dump_log(config=config, metrics=metric_dict, split='test')
-        if config.save_k_predictions > 0:
-            if not config.predict_out_path:
-                config.predict_out_path = os.path.join(
-                    checkpoint_dir, 'predictions.txt')
-            save_top_k_predictions(model.classes,
-                                   model.test_results.get_y_pred(),
-                                   config.predict_out_path, config.save_k_predictions)
+            trainer.train()
+    # test
+    if 'test' in trainer.datasets:
+        if config.linear:
+            # linear.predict_values(model, x)
+            pass
+        else:
+            trainer.test()
 
 
 if __name__ == '__main__':
